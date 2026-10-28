@@ -18,14 +18,28 @@ class LocalizationTests(unittest.TestCase):
             q.locate("button", single_pass=True)
             call.assert_called_once_with("button", 1920, 1080)
 
-    def test_moving_and_resizing_window_updates_capture_geometry(self):
-        windows = [[(777, "Example", (100, 200, 600, 500))], [(777, "Example", (300, 400, 1000, 800))], [(777, "Example", (300, 400, 1000, 800))]]
-        with patch.object(q, "find_window", side_effect=windows), patch.object(q, "screenshot_window") as snap, patch.object(q, "call_qwen3", return_value=({"button": {"cx": 0, "cy": 0}}, None, 0)) as call:
-            # Return fresh dicts: locate adds the current window offset in-place.
-            call.side_effect = lambda *args: ({"button": {"cx": 0, "cy": 0}}, None, 0)
-            q.locate("button", mode="win", window_name="Example", single_pass=False)
-            self.assertEqual(call.call_args_list[1].args, ("button", 700, 400))
-            self.assertEqual(snap.call_args_list[1].args, (300, 400, 700, 400))
+    def test_window_move_during_request_discards_results(self):
+        windows = [[(777, "Example", (100, 200, 600, 500))], [(777, "Example", (300, 400, 1000, 800))]]
+        with patch.object(q, "find_window", side_effect=windows), patch.object(q, "screenshot_window"), patch.object(q, "call_qwen3", return_value=({"button": {"cx": 0, "cy": 0}}, None, 0)):
+            with self.assertRaisesRegex(RuntimeError, "STALE"):
+                q.locate("button", mode="win", window_name="Example")
+
+    def test_duplicate_windows_never_capture(self):
+        with patch.object(q, "find_window", return_value=[(1, "Example", (0,0,100,100)), (2, "Example", (0,0,100,100))]), patch.object(q, "screenshot_window") as snap:
+            with self.assertRaises(RuntimeError):
+                q.locate("button", mode="win", window_name="Example")
+            snap.assert_not_called()
+
+    def test_duplicate_targets_never_choose_first(self):
+        with self.assertRaises(SystemExit):
+            v2.choose_point([{"name": "button1"}, {"name": "button2"}])
+
+    def test_failed_text_focus_never_clears_or_pastes(self):
+        with patch.object(v2.v1, "click_xy"), patch.object(v2.time, "sleep"), patch.object(v2.v1, "require_text_focus", side_effect=SystemExit("IME")), patch.object(v2.v1, "send_ctrl_a_backspace") as clear, patch.object(v2.v1, "send_ctrl_v") as paste:
+            with self.assertRaises(SystemExit):
+                v2.paste_at(10, 10, "test", replace=True)
+            clear.assert_not_called()
+            paste.assert_not_called()
 
     def test_unstable_results_do_not_reach_click_selection(self):
         with patch.object(v2, "run_capture", return_value=(0, "[WARN] UNSTABLE", "")):

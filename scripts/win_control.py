@@ -13,6 +13,7 @@ MOUSE = OPENCLAW_SCRIPTS + r"\mouse.py"
 
 def _user32():
     user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
     user32.SetProcessDPIAware()
     return user32
 
@@ -44,12 +45,80 @@ def activate_window(title_part: str):
     matches = find_window(title_part)
     if not matches:
         raise SystemExit(f"[NOT FOUND] window containing: {title_part}")
+    if len(matches) != 1:
+        raise SystemExit(f"[AMBIGUOUS] Expected one window, found {len(matches)}: {matches}")
     hwnd, title = matches[0]
     user32.ShowWindow(hwnd, 5)
     user32.SetForegroundWindow(hwnd)
     time.sleep(0.6)
     print(f"[Window] {title}")
+    if user32.GetForegroundWindow() != hwnd:
+        raise SystemExit("[FOCUS] Target window did not become foreground")
     return hwnd, title
+
+
+def window_state(title):
+    import qwen_locate as q
+    matches = q.find_window(title)
+    if len(matches) != 1:
+        raise SystemExit(f"[WINDOW] Expected exactly one window, found {len(matches)}")
+    hwnd, name, rect = matches[0]
+    return hwnd, name, rect
+
+
+def validate_window(state, x=None, y=None):
+    import win32gui
+    import qwen_locate as q
+    hwnd, title, rect = state
+    if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+        raise SystemExit("[STALE] Target window disappeared")
+    if win32gui.GetWindowText(hwnd) != title or q.get_physical_rect(hwnd) != rect:
+        raise SystemExit("[STALE] Window changed; locate again")
+    if win32gui.GetForegroundWindow() != hwnd:
+        raise SystemExit("[FOCUS] Target window lost foreground")
+    if x is not None:
+        if not (rect[0] <= x < rect[2] and rect[1] <= y < rect[3]):
+            raise SystemExit("[BOUNDS] Point is outside target window")
+        hit = win32gui.WindowFromPoint((x, y))
+        if win32gui.GetAncestor(hit, 2) != hwnd:
+            raise SystemExit("[OCCLUDED] Point belongs to another window")
+
+
+def require_text_focus(state=None):
+    import win32gui
+    import win32process
+    user32 = _user32()
+    hwnd = state[0] if state else win32gui.GetForegroundWindow()
+    if state:
+        validate_window(state)
+    class GUIINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD),
+                    ("active", wintypes.HWND), ("focus", wintypes.HWND),
+                    ("capture", wintypes.HWND), ("menu", wintypes.HWND),
+                    ("move", wintypes.HWND), ("caret", wintypes.HWND),
+                    ("rect", wintypes.RECT)]
+    info = GUIINFO()
+    info.cbSize = ctypes.sizeof(info)
+    thread, _ = win32process.GetWindowThreadProcessId(hwnd)
+    if not user32.GetGUIThreadInfo(thread, ctypes.byref(info)) or not info.focus or not info.caret:
+        raise SystemExit("[FOCUS] Cannot confirm a text caret; no text was sent")
+    if win32gui.GetAncestor(info.focus, 2) != hwnd:
+        raise SystemExit("[FOCUS] Text focus is outside target window")
+    imm = ctypes.windll.imm32
+    imm.ImmGetContext.argtypes = [wintypes.HWND]
+    imm.ImmGetContext.restype = wintypes.HANDLE
+    imm.ImmGetCompositionStringW.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+    imm.ImmReleaseContext.argtypes = [wintypes.HWND, wintypes.HANDLE]
+    context = imm.ImmGetContext(info.focus)
+    if context:
+        try:
+            size = imm.ImmGetCompositionStringW(context, 8, None, 0)
+            if size != 0:
+                raise SystemExit("[IME] Composition active or unreadable; finish/cancel candidates and retry")
+        finally:
+            imm.ImmReleaseContext(info.focus, context)
+    # TSF-only editors may not expose a caret/context. This is a conservative
+    # Win32 check, not a guarantee that every editor accepts text.
 
 
 def click_xy(x: int, y: int):
@@ -107,14 +176,19 @@ def click(args):
 
 
 def paste(args):
+    state = None
     if args.win:
         activate_window(args.win)
+        state = window_state(args.win)
+        validate_window(state, args.x, args.y)
     click_xy(args.x, args.y)
     time.sleep(0.25)
+    require_text_focus(state)
     if args.replace:
         send_ctrl_a_backspace()
     set_clipboard_text(args.text)
     time.sleep(0.15)
+    require_text_focus(state)
     send_ctrl_v()
     print("[Pasted] text placed on clipboard and Ctrl+V sent; no Enter was pressed.")
 

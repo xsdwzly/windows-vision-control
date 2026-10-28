@@ -101,6 +101,8 @@ if __name__ == "__main__":
         for i, (hwnd, t, x, y, w, h) in enumerate(matches):
             print(f"  [{i}] {t} ({x},{y}) {w}x{h}")
 
+        sys.exit("[AMBIGUOUS] Use a unique window title")
+
     hwnd, title, logical_x, logical_y, logical_w, logical_h = matches[0]
     print(f"[Window] {title}")
 

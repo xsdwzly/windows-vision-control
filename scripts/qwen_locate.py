@@ -94,8 +94,10 @@ def locate(targets, mode="full", single_pass=False, window_name=None):
     win_x, win_y = 0, 0
     if mode == "win" and window_name:
         wins = find_window(window_name)
-        if not wins: print(f"[ERROR] 未找到: {window_name}"); return {}
+        if len(wins) != 1:
+            raise RuntimeError(f"Expected exactly one window; found {len(wins)}")
         hwnd, title, (left, top, right, bottom) = wins[0]
+        bound_hwnd, bound_rect = hwnd, (left, top, right, bottom)
         win_w, win_h = right-left, bottom-top
         win_x, win_y = left, top
         print(f"[Window] {title}  ({left},{top}) {win_w}x{win_h}")
@@ -119,7 +121,9 @@ def locate(targets, mode="full", single_pass=False, window_name=None):
             # v2: 重截图保证每轮独立, 某轮截到坏图会与其他轮分歧 → 触发 UNSTABLE; 窗口移动则每轮对准新位置。
             if mode == "win" and window_name:
                 wins = find_window(window_name)
-                if wins:
+                if len(wins) == 1:
+                    if wins[0][0] != bound_hwnd or wins[0][2] != bound_rect:
+                        raise RuntimeError("STALE: window changed; discard results and locate again")
                     _, _, (nx, ny, nr, nb) = wins[0]
                     win_x, win_y = nx, ny   # 关键: 偏移随窗口更新
                     screen_w, screen_h = nr-nx, nb-ny
@@ -129,6 +133,10 @@ def locate(targets, mode="full", single_pass=False, window_name=None):
             else:
                 screen_w, screen_h = screenshot_ps()
         results, error, tok = call_qwen3(targets, screen_w, screen_h)
+        if mode == "win" and window_name:
+            current = find_window(window_name)
+            if len(current) != 1 or current[0][0] != bound_hwnd or current[0][2] != bound_rect:
+                raise RuntimeError("STALE: window changed during model request; discard results")
         if error: print(f"[WARN] {error}"); continue
         tok_total += tok if tok else 0
         # 加窗口偏移
@@ -136,7 +144,7 @@ def locate(targets, mode="full", single_pass=False, window_name=None):
             for r in results.values(): r["cx"] += win_x; r["cy"] += win_y
         all_runs.append(results)
         if single_pass or run == 1: continue
-        if run == 2:
+        if len(all_runs) == 2:
             names = set(all_runs[0].keys()) & set(all_runs[1].keys())
             if not names: break
             md = max(max(abs(all_runs[0][n]["cx"]-all_runs[1][n]["cx"]), abs(all_runs[0][n]["cy"]-all_runs[1][n]["cy"])) for n in names)

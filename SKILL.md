@@ -32,3 +32,34 @@ Localization sends the captured image to Alibaba Cloud DashScope using the user'
 ## Experimental V2 wrapper
 
 scripts/win_control_v2.py provides structured actions, action logs and dry-run input. It stops on UNSTABLE results. Important: target-based dry-run still performs localization and sends a screenshot; it only suppresses the final input. Full-screen verification export is not implemented in V2. Logs may contain window titles, targets and typed text; keep runtime/ private.
+
+
+## Window and text guards (2026-10-28)
+
+Window title queries must match exactly one visible window. Window localization binds
+that handle, title and physical rectangle; movement/replacement during any model
+request aborts instead of combining stale coordinates. V2 window target actions
+recheck geometry, foreground and point ownership before input. These checks cannot
+eliminate the final operating-system scheduling race or detect every layout change.
+Raw coordinate clicks and full-screen actions have no window binding.
+
+V1 paste and V2 paste/type require a Win32 text caret and reject active/read-error
+IMM composition before clearing or sending text. They do not cancel candidates or
+switch keyboard layouts. TSF-only/custom editors may not expose enough state;
+IMM checks do not guarantee detection of all modern IME candidate windows. Inspect
+focus and resulting text; a successful key injection is not content verification.
+Multiple returned targets require a unique target/prefer-name; no default first match.
+
+## Pure visual fast verification
+
+For an inspected stable layout and authorized reversible clicks, prefer
+`scripts/visual_sequence.py observe/run` with local RapidOCR checkpoints; see
+README.md for the plan schema and optional requirements-vision.txt. Inspect the
+new observation, use window-relative physical coordinates and tight single-line
+result ROIs, start by verifying the initial display, then verify each short
+segment. Do not treat pixel changes alone as semantic success. Never skip a failed
+checkpoint or replay uncertain actions. On mismatch inspect the saved local failure
+image and observe again; there is no automatic upload or retry. This flow uses no
+UIA and does not use the older paste/type caret checks. Keep raw text/reports private.
+
+If `runtime/vision-runtime.json` exists locally, its `python` field identifies the optional OCR interpreter. Use that interpreter for visual_sequence.py. This machine-local config stays under ignored runtime/.

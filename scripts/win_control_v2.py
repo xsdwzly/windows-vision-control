@@ -115,6 +115,7 @@ def locate_target(target, win=None, single=False, log=True):
         cmd.append("--1")
     cmd.append(target)
 
+    bound = v1.window_state(win) if win else None
     code, stdout, stderr = run_capture(cmd)
     if stdout:
         print(stdout, end="")
@@ -125,7 +126,11 @@ def locate_target(target, win=None, single=False, log=True):
 
     if "[WARN] UNSTABLE" in stdout:
         raise SystemExit("[V2] Unstable localization; inspect a fresh screenshot before retrying.")
+    if bound:
+        v1.validate_window(bound)
     results = parse_locate_output(stdout)
+    for result in results:
+        result["window_state"] = bound
     if log:
         append_log(
             {
@@ -142,12 +147,18 @@ def locate_target(target, win=None, single=False, log=True):
 def choose_point(results, prefer_name=None):
     if not results:
         raise SystemExit("[V2] locate returned no parseable coordinates.")
+    candidates = results
     if prefer_name:
-        needle = prefer_name.lower()
-        for item in results:
-            if needle in item["name"].lower():
-                return item
-    return sorted(results, key=lambda item: item.get("max_deviation", 0))[0]
+        candidates = [item for item in results if prefer_name.lower() in item["name"].lower()]
+    if len(candidates) != 1:
+        raise SystemExit("[V2] Expected exactly one matching target; refine target/prefer-name")
+    return candidates[0]
+
+
+def validate_point(point):
+    if point.get("window_state"):
+        v1.validate_window(point["window_state"], point["x"], point["y"])
+
 
 
 def screenshot(win=None):
@@ -203,6 +214,7 @@ def click_sequence(points, delay=0.16, dry_run=False):
 def click_target(args):
     results = locate_target(args.target, win=args.win, single=args.single)
     point = choose_point(results, args.prefer_name)
+    validate_point(point)
     print(f"[V2] selected: {point['name']} -> ({point['x']}, {point['y']})")
     click_point(point["x"], point["y"], dry_run=args.dry_run)
     snap = screenshot(args.win) if args.verify and not args.dry_run else ""
@@ -217,18 +229,23 @@ def click_target(args):
     )
 
 
-def paste_at(x, y, text, win=None, replace=False, dry_run=False):
+def paste_at(x, y, text, win=None, replace=False, dry_run=False, expected_state=None):
+    state = None
     if win:
         v1.activate_window(win)
+        state = expected_state or v1.window_state(win)
+        v1.validate_window(state, x, y)
     if dry_run:
         print(f"[V2 dry-run] would paste {len(text)} chars at ({x}, {y}); replace={replace}")
         return
     v1.click_xy(x, y)
     time.sleep(0.25)
+    v1.require_text_focus(state)
     if replace:
         v1.send_ctrl_a_backspace()
     set_clipboard_text(text)
     time.sleep(0.15)
+    v1.require_text_focus(state)
     v1.send_ctrl_v()
     print("[V2] pasted with clipboard; no Enter was pressed.")
 
@@ -248,16 +265,20 @@ def set_clipboard_text(text):
     )
 
 
-def type_at(x, y, text, win=None, dry_run=False, interval=0.02):
+def type_at(x, y, text, win=None, dry_run=False, interval=0.02, expected_state=None):
     if any(ord(ch) > 127 for ch in text):
         raise SystemExit("[V2] type supports ASCII only; use paste only when explicitly allowed.")
+    state = None
     if win:
         v1.activate_window(win)
+        state = expected_state or v1.window_state(win)
+        v1.validate_window(state, x, y)
     if dry_run:
         print(f"[V2 dry-run] would type {text!r} at ({x}, {y})")
         return
     v1.click_xy(x, y)
     time.sleep(0.2)
+    v1.require_text_focus(state)
     import pyautogui
 
     pyautogui.write(text, interval=interval)
@@ -267,6 +288,7 @@ def type_at(x, y, text, win=None, dry_run=False, interval=0.02):
 def type_target(args):
     results = locate_target(args.target, win=args.win, single=args.single)
     point = choose_point(results, args.prefer_name)
+    validate_point(point)
     print(f"[V2] selected: {point['name']} -> ({point['x']}, {point['y']})")
     type_at(
         point["x"],
@@ -275,6 +297,7 @@ def type_target(args):
         win=args.win,
         dry_run=args.dry_run,
         interval=args.interval,
+        expected_state=point.get("window_state"),
     )
     snap = screenshot(args.win) if args.verify and not args.dry_run else ""
     append_log(
@@ -292,6 +315,7 @@ def type_target(args):
 def paste_target(args):
     results = locate_target(args.target, win=args.win, single=args.single)
     point = choose_point(results, args.prefer_name)
+    validate_point(point)
     print(f"[V2] selected: {point['name']} -> ({point['x']}, {point['y']})")
     paste_at(
         point["x"],
@@ -299,6 +323,7 @@ def paste_target(args):
         args.text,
         win=args.win,
         replace=args.replace,
+        expected_state=point.get("window_state"),
         dry_run=args.dry_run,
     )
     snap = screenshot(args.win) if args.verify and not args.dry_run else ""
