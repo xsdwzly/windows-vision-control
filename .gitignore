@@ -1,0 +1,11 @@
+runtime/
+logs/
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+*.jpg
+*.jpeg
+*.png
+*.jsonl

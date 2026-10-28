@@ -1,0 +1,41 @@
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import qwen_locate as q
+import win_control_v2 as v2
+
+
+class LocalizationTests(unittest.TestCase):
+    def test_window_handle_is_preserved(self):
+        with patch.object(q.win32gui, "EnumWindows", side_effect=lambda cb, arg: cb(777, arg)), patch.object(q.win32gui, "IsWindowVisible", return_value=True), patch.object(q.win32gui, "GetWindowText", return_value="Example"), patch.object(q, "get_physical_rect", return_value=(100, 200, 600, 500)):
+            self.assertEqual(q.find_window("Example"), [(777, "Example", (100, 200, 600, 500))])
+
+    def test_primary_dimensions_are_used(self):
+        with patch.object(q, "screenshot_ps", return_value=(1920, 1080)), patch.object(q, "call_qwen3", return_value=({"button": {"cx": 50, "cy": 60}}, None, 0)) as call:
+            q.locate("button", single_pass=True)
+            call.assert_called_once_with("button", 1920, 1080)
+
+    def test_moving_and_resizing_window_updates_capture_geometry(self):
+        windows = [[(777, "Example", (100, 200, 600, 500))], [(777, "Example", (300, 400, 1000, 800))], [(777, "Example", (300, 400, 1000, 800))]]
+        with patch.object(q, "find_window", side_effect=windows), patch.object(q, "screenshot_window") as snap, patch.object(q, "call_qwen3", return_value=({"button": {"cx": 0, "cy": 0}}, None, 0)) as call:
+            # Return fresh dicts: locate adds the current window offset in-place.
+            call.side_effect = lambda *args: ({"button": {"cx": 0, "cy": 0}}, None, 0)
+            q.locate("button", mode="win", window_name="Example", single_pass=False)
+            self.assertEqual(call.call_args_list[1].args, ("button", 700, 400))
+            self.assertEqual(snap.call_args_list[1].args, (300, 400, 700, 400))
+
+    def test_unstable_results_do_not_reach_click_selection(self):
+        with patch.object(v2, "run_capture", return_value=(0, "[WARN] UNSTABLE", "")):
+            with self.assertRaises(SystemExit):
+                v2.locate_target("button", log=False)
+
+    def test_missing_key_does_not_read_private_config(self):
+        with patch.dict(q.os.environ, {}, clear=True), patch("builtins.open", side_effect=AssertionError("must not read config")):
+            self.assertEqual(q.get_api_key(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

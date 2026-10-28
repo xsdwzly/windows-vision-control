@@ -1,0 +1,4 @@
+interface:
+  display_name: "Windows Vision Control"
+  short_description: "Locate and click Windows UI visually."
+  default_prompt: "Use Windows vision control to locate a visible target on my main display, click it, or paste text into it."
